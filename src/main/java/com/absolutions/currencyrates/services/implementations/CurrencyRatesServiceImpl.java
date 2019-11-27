@@ -50,19 +50,26 @@ public class CurrencyRatesServiceImpl implements CurrencyRatesService {
 
     String uri = String.format("%ssymbols?access_key=%s", baseUri, apiKey);
     ObjectMapper mapper = new ObjectMapper();
+    Map<String, String> currenciesMap;
     String jsonInput= getResponse(uri).getBody();
-    if ( jsonInput != null && jsonInput.length() > 0) {
-      return mapper.readValue(jsonInput, ConversionRates.class);
+    if (jsonInput != null && jsonInput.length() > 0) {
+      ConversionRates conversionRates = mapper.readValue(jsonInput, ConversionRates.class);
+      currenciesMap = conversionRates.getSymbols();
+      this.populateWithCurrencies(currenciesMap);
+
+      return conversionRates;
     }
     return null;
   }
 
   @Override
-  public ConversionRates getAllExchangeRatesFromNinetyNine(String base) throws JsonProcessingException {
+  public ConversionRates getAllExchangeRatesFromNinetyNine(String base)
+    throws JsonProcessingException, ParseException {
     LocalDate startDate = LocalDate.of(1999, 1, 1);
     LocalDate today = LocalDate.now();
     ObjectMapper mapper = new ObjectMapper();
     Map <String, Map<String, String>> rates = new LinkedHashMap<>();
+    List<CurrencyPairRate> currencyPairRates = new ArrayList<>();
     ConversionRates tmp = null;
     while(startDate.isBefore(today)) {
       LocalDate endDate = startDate.plusDays(365);
@@ -73,10 +80,12 @@ public class CurrencyRatesServiceImpl implements CurrencyRatesService {
       String jsonInput= getResponse(uri).getBody();
       if (jsonInput != null && jsonInput.length() > 0) {
         tmp = mapper.readValue(jsonInput, ConversionRates.class);
+        populateCurrencyPairRate(tmp, base, currencyPairRates);
         rates.putAll(tmp.getRates());
       }
       startDate = endDate.plusDays(1);
     }
+    currencyPairRateRepository.saveAll(currencyPairRates);
     if (tmp != null) {
       tmp.setRates(rates);
     }
@@ -84,12 +93,24 @@ public class CurrencyRatesServiceImpl implements CurrencyRatesService {
   }
 
   @Override
-  public CurrentConversionRates getAllExchangeRatesFromDate(String base, String date) throws JsonProcessingException {
+  public CurrentConversionRates getAllExchangeRatesFromDate(String base, String date)
+    throws JsonProcessingException, ParseException {
     String uri = String.format("%s%s?access_key=%s&base=%s", baseUri, date, apiKey, base);
     ObjectMapper mapper = new ObjectMapper();
     String jsonInput= getResponse(uri).getBody();
+    List<CurrencyPairRate> currencyPairRates = new ArrayList<>();
     if (jsonInput != null && jsonInput.length() > 0) {
-      return mapper.readValue(jsonInput, CurrentConversionRates.class);
+      CurrentConversionRates currentConversionRates = mapper.readValue(jsonInput, CurrentConversionRates.class);
+      for (Map.Entry<String, String> quoteValue: currentConversionRates.getRates().entrySet()) {
+        CurrencyPairRate cpRate = new CurrencyPairRate();
+        cpRate.setBase(base);
+        cpRate.setDate(dateFormat.parse(date));
+        cpRate.setQuote(quoteValue.getKey());
+        cpRate.setRate(Float.parseFloat(quoteValue.getValue()));
+        currencyPairRates.add(cpRate);
+      }
+      currencyPairRateRepository.saveAll(currencyPairRates);
+      return currentConversionRates;
     }
     return null;
   }
@@ -101,8 +122,19 @@ public class CurrencyRatesServiceImpl implements CurrencyRatesService {
     String uri = String.format("%s%s?access_key=%s&base=%s", baseUri, currentDate, apiKey, base);
     ObjectMapper mapper = new ObjectMapper();
     String jsonInput= getResponse(uri).getBody();
+    List<CurrencyPairRate> currencyPairRates = new ArrayList<>();
     if (jsonInput != null && jsonInput.length() > 0) {
-      return mapper.readValue(jsonInput, CurrentConversionRates.class);
+      CurrentConversionRates currentConversionRates = mapper.readValue(jsonInput, CurrentConversionRates.class);
+      for (Map.Entry<String, String> quoteValue: currentConversionRates.getRates().entrySet()) {
+        CurrencyPairRate cpRate = new CurrencyPairRate();
+        cpRate.setBase(base);
+        cpRate.setDate(new Date());
+        cpRate.setQuote(quoteValue.getKey());
+        cpRate.setRate(Float.parseFloat(quoteValue.getValue()));
+        currencyPairRates.add(cpRate);
+      }
+      currencyPairRateRepository.saveAll(currencyPairRates);
+      return currentConversionRates;
     }
     return null;
   }
@@ -123,16 +155,7 @@ public class CurrencyRatesServiceImpl implements CurrencyRatesService {
       String jsonInput= getResponse(uri).getBody();
       if (jsonInput != null && jsonInput.length() > 0) {
         tmp = mapper.readValue(jsonInput, ConversionRates.class);
-        for (Map.Entry<String, Map<String, String>> dateQuoteValue : tmp.getRates().entrySet()) {
-          for (Map.Entry<String, String> quoteValue: dateQuoteValue.getValue().entrySet()) {
-            CurrencyPairRate cpRate = new CurrencyPairRate();
-            cpRate.setBase(base);
-            cpRate.setDate(dateFormat.parse(dateQuoteValue.getKey()));
-            cpRate.setQuote(quoteValue.getKey());
-            cpRate.setRate(Float.parseFloat(quoteValue.getValue()));
-            rates.add(cpRate);
-          }
-        }
+        populateCurrencyPairRate(tmp, base, rates);
       }
       startDate = endDate.plusDays(1);
     }
@@ -150,14 +173,7 @@ public class CurrencyRatesServiceImpl implements CurrencyRatesService {
       ConversionRates conversionRates = mapper.readValue(jsonInput, ConversionRates.class);
       currenciesMap = conversionRates.getSymbols();
     }
-
-    for (Map.Entry<String,String> entry : currenciesMap.entrySet()) {
-      Currency currency = new Currency();
-      currency.setCode(entry.getKey());
-      currency.setName(entry.getValue());
-      currencyRepository.save(currency);
-    }
-
+    this.populateWithCurrencies(currenciesMap);
     return true;
   }
 
@@ -177,5 +193,28 @@ public class CurrencyRatesServiceImpl implements CurrencyRatesService {
     HttpEntity entity = new HttpEntity(headers);
     return restTemplate.exchange(uri, HttpMethod.GET, entity, String.class);
 
+  }
+
+  private void populateWithCurrencies(Map<String, String> currenciesMap ) {
+    for (Map.Entry<String,String> entry : currenciesMap.entrySet()) {
+      Currency currency = new Currency();
+      currency.setCode(entry.getKey());
+      currency.setName(entry.getValue());
+      currencyRepository.save(currency);
+    }
+  }
+
+  private void populateCurrencyPairRate(ConversionRates tmp, String base, List<CurrencyPairRate> rates)
+    throws ParseException {
+    for (Map.Entry<String, Map<String, String>> dateQuoteValue : tmp.getRates().entrySet()) {
+      for (Map.Entry<String, String> quoteValue: dateQuoteValue.getValue().entrySet()) {
+        CurrencyPairRate cpRate = new CurrencyPairRate();
+        cpRate.setBase(base);
+        cpRate.setDate(dateFormat.parse(dateQuoteValue.getKey()));
+        cpRate.setQuote(quoteValue.getKey());
+        cpRate.setRate(Float.parseFloat(quoteValue.getValue()));
+        rates.add(cpRate);
+      }
+    }
   }
 }

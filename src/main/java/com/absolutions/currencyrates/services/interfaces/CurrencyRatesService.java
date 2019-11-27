@@ -12,9 +12,11 @@ public interface CurrencyRatesService {
 
   ConversionRates getAllCurrencies() throws JsonProcessingException;
 
-  ConversionRates getAllExchangeRatesFromNinetyNine(String base) throws JsonProcessingException;
+  ConversionRates getAllExchangeRatesFromNinetyNine(String base)
+    throws JsonProcessingException, ParseException;
 
-  CurrentConversionRates getAllExchangeRatesFromDate(String base, String date) throws JsonProcessingException;
+  CurrentConversionRates getAllExchangeRatesFromDate(String base, String date)
+    throws JsonProcessingException, ParseException;
 
   CurrentConversionRates getAllExchangeRatesForCurrentDay(String base) throws JsonProcessingException;
 
